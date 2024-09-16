@@ -14,8 +14,9 @@ First player to reach 5 points wins, draw if both reaches together.
 #PIECES INFO
 
 Each piece has its own set of "available_square". For "PR" its the square to its left or (x-1,y)
-and the square diagonally up to the right or (x+1,y+1). The pieces are designed in a way to point
-to their "available_squares". "DN" piece is a special case, for it (x-1,y) and (x+1,y) are 
+and the square diagonally up to the right or (x+1,y+1). 
+
+The pieces are designed in a way so that their parts point to their "available_squares". "DN" piece is a special case, for it (x-1,y) and (x+1,y) are 
 inaccessible, this is shown by coloring the points red in its design.
 
 #MOVEMENT INFO [IMPORTANT]
