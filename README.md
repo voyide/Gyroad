@@ -1,4 +1,5 @@
 #BASIC INFO
+
 This is gyroad, 2 player game, 14 piece each player (see them before reading further).
 Only bottom row pieces can be rotated (at most 2 times each turn).
 When your PR or PL piece reaches the other side of the board it gets removed and you get 1 point.
