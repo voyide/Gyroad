@@ -1,11 +1,18 @@
 #BASIC INFO
 
 This is gyroad, 2 player game, 14 piece each player (see them before reading further).
+
 Only bottom row pieces can be rotated (at most 2 times each turn).
+
 When your PR or PL piece reaches the other side of the board it gets removed and you get 1 point.
+
 First player to reach 5 points wins, draw if both reaches together.
 
+
+
+
 #PIECES INFO
+
 Each piece has its own set of "available_square". For "PR" its the square to its left or (x-1,y)
 and the square diagonally up to the right or (x+1,y+1). The pieces are designed in a way to point
 to their "available_squares". "DN" piece is a special case, for it (x-1,y) and (x+1,y) are 
