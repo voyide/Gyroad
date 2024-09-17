@@ -4,7 +4,7 @@ This is gyroad, 2 player game, 14 piece each player (see them before reading fur
 
 Only bottom row pieces can be rotated (at most 2 times each turn).
 
-When your PR or PL piece reaches the other side of the board it gets removed and you get 1 point.
+When "you" move your PR or PL to the other side of the board it gets removed and you get 1 point, the piece doesn't get removed and no point is given if enemy moves you PR or PL piece to the other end by exchanging positions of pieces.
 
 First player to reach 5 points wins, draw if both reaches together.
 
