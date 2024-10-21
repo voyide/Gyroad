@@ -4,9 +4,9 @@ This is gyroad, 2 player game, 14 piece each player (see them before reading fur
 
 Only bottom row pieces can be rotated (at most 2 times each turn).
 
-When "you" move your PR or PL to the other side of the board it gets removed and you get 1 point, the piece doesn't get removed and no point is given if enemy moves you PR or PL piece to the other end by exchanging positions of pieces.
+When PR or PL is moved to the other side of the board it gets removed and you get 1 point.
 
-First player to reach 5 points wins, draw if both reaches together.
+First player to reach 6 points wins, draw if both reaches together.
 
 
 
@@ -32,9 +32,7 @@ You CAN'T move a selected piece directly to its "available_squares".
 •  This continues for all of the friendly pieces forming a link or chain of "available_squares"
    for S to move or exchange.
    
-•  You can't move S to any of the "available_squares" of an enemy piece, but you can switch their
-   positions.
-
+•  You can't access enemy piece's "available_squares", but you can switch positions of your piece with enemy piece.
 
 #GAMEPLAY INFO
 •  If you 'move' or 'switch your piece with any other piece' your turn ends.
