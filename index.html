@@ -2,27 +2,69 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Gyroad (Web)</title>
+  <title>Gyroad (Web) — Human vs Bot</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#000000" />
   <style>
     :root {
       color-scheme: dark;
+      --bg: #0b0b0b;
+      --fg: #e8e8e8;
+      --muted: #a0a0a0;
+      --accent: #4dd3ff;
+      --accent-2: #7effa1;
+      --danger: #ff6b6b;
+      --panel: #141414;
+      --panel-2: #1a1a1a;
+      --border: #2a2a2a;
+      --shadow: rgba(0,0,0,0.35);
     }
+    * { box-sizing: border-box; }
     html, body {
       height: 100%;
       margin: 0;
-      background: #000;
-      color: #fff;
+      background: var(--bg);
+      color: var(--fg);
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial, "Noto Sans", sans-serif;
       overscroll-behavior: none;
     }
-    #wrap {
-      position: fixed;
-      inset: 0;
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+    }
+    header {
+      padding: 10px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header .title {
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    header .status {
+      display: inline-flex;
+      gap: 12px;
+      align-items: center;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    header .pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      font-size: 12px;
+    }
+    main {
       display: grid;
       place-items: center;
-      background: #000;
+      padding: 10px;
     }
     canvas#game {
       display: block;
@@ -34,23 +76,122 @@
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       outline: none;
+      box-shadow: 0 10px 30px var(--shadow);
+      border-radius: 10px;
+      border: 1px solid var(--border);
     }
-    #hint {
-      position: fixed;
-      left: 0; right: 0; bottom: 0;
+    footer {
+      padding: 10px 16px 14px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    @media (min-width: 720px) {
+      .controls {
+        grid-template-columns: auto 1fr auto auto;
+        align-items: center;
+      }
+    }
+    .control-group {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .control-group label {
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 70px;
+    }
+    .control-group input[type="range"] {
+      width: 220px;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #101010;
+      color: var(--fg);
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.02s ease;
+      box-shadow: 0 2px 8px var(--shadow);
+    }
+    .btn:hover { background: #161616; }
+    .btn:active { transform: translateY(1px); }
+    .btn.accent { background: #0a2230; border-color: #123a52; color: var(--accent); }
+    .btn.accent:hover { background: #0c2a3a; }
+    .btn.danger { background: #2b0f12; border-color: #402226; color: var(--danger); }
+    .tiny {
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+      margin-top: 4px;
+    }
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      display: inline-block;
+      animation: spin 0.8s linear infinite;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hint {
       text-align: center;
       font-size: 12px;
       opacity: 0.7;
-      padding: 6px 8px;
-      pointer-events: none;
+      padding: 4px 8px 0;
+      color: var(--muted);
     }
   </style>
 </head>
 <body>
-  <div id="wrap">
-    <canvas id="game" tabindex="0" aria-label="Gyroad canvas"></canvas>
+  <div class="app">
+    <header>
+      <div class="title">Gyroad — Human vs Bot</div>
+      <div class="status">
+        <span id="who-turn" class="pill">Player 1’s turn</span>
+        <span id="bot-status" class="pill">Bot: ready</span>
+      </div>
+    </header>
+
+    <main>
+      <canvas id="game" tabindex="0" aria-label="Gyroad canvas"></canvas>
+    </main>
+
+    <footer>
+      <div class="controls">
+        <div class="control-group" title="AI search time per move">
+          <label for="ai-time">Bot strength</label>
+          <input id="ai-time" type="range" min="50" max="600" step="10" value="140" />
+          <span id="ai-time-label">140 ms</span>
+        </div>
+
+        <div class="control-group" title="AI search depth cap (used by iterative deepening)">
+          <label for="ai-depth">Max depth</label>
+          <input id="ai-depth" type="range" min="1" max="4" step="1" value="3" />
+          <span id="ai-depth-label">3</span>
+        </div>
+
+        <button id="btn-new" class="btn accent">New Game</button>
+        <button id="btn-hint" class="btn">Hint</button>
+      </div>
+      <div class="hint">Tap a piece to select. Tap a highlighted square to move/swap. Tap Rotate to rotate allowed pieces, then Done/Cancel. Tap the selected piece again to cancel.</div>
+      <div class="tiny">Rotations: DP/DT/DN/C pieces only, 2 rotations per turn. Promotions score when PR/PL reach the far row.</div>
+    </footer>
   </div>
-  <div id="hint">Tap a piece to select. Tap a highlighted square to move/swap. Tap Rotate to rotate allowed pieces, then Done/Cancel. Tap the selected piece again to cancel.</div>
+
   <script src="game.js" defer></script>
 </body>
 </html>
