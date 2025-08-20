@@ -1,15 +1,40 @@
 import pygame
 import sys
 import math
+import os
 from collections import deque
-from PIL import Image, ImageSequence
+
+# Detect web runtime (pygbag/pygame-web)
+IS_WEB = sys.platform == "emscripten"
+
+# Optional GIF loader (no PIL). Disable on web to avoid heavy deps.
+try:
+    if IS_WEB:
+        raise ImportError("Disable imageio on web (use frames fallback)")
+    import imageio.v2 as imageio
+except Exception:
+    imageio = None
 
 pygame.init()
-screen_info = pygame.display.Info()
+
+# Board constants
 BOARD_WIDTH = 7
 BOARD_HEIGHT = 8
-SQUARE_SIZE = min(screen_info.current_w // BOARD_WIDTH, (screen_info.current_h - 150) // BOARD_HEIGHT)
 
+def pick_canvas_size():
+    # Browser: display.Info() may report zeros before set_mode
+    if IS_WEB:
+        w = int(os.environ.get("PYGAME_WEB_WIDTH", "840"))
+        h = int(os.environ.get("PYGAME_WEB_HEIGHT", "900"))
+        return max(w, 560), max(h, 750)
+    info = pygame.display.Info()
+    w = info.current_w or 1280
+    h = info.current_h or 800
+    return w, h
+
+cw, ch = pick_canvas_size()
+
+SQUARE_SIZE = max(48, min(cw // BOARD_WIDTH, (ch - 150) // BOARD_HEIGHT))
 SCREEN_WIDTH = SQUARE_SIZE * BOARD_WIDTH
 SCREEN_HEIGHT = SQUARE_SIZE * BOARD_HEIGHT + 150
 
@@ -21,8 +46,12 @@ DARK_RED = (128, 0, 0)
 YELLOW = (255, 255, 0)
 DARK_YELLOW = (128, 128, 0)
 
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+flags = pygame.SCALED if IS_WEB else 0
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
 pygame.display.set_caption("Gyroad")
+
+# Reduce event queue churn (we don't use mouse motion)
+pygame.event.set_blocked(pygame.MOUSEMOTION)
 
 try:
     board_image_raw = pygame.image.load('assets/board/B.jpeg').convert()
@@ -34,9 +63,9 @@ board_image = pygame.transform.scale(board_image_raw, (SQUARE_SIZE * BOARD_WIDTH
 
 board = [[0 for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
 
+# Load base images
 IMAGES = {}
 for piece_type in ['PR', 'PL', 'PX', 'DP', 'DT', 'DN', 'C']:
-
     try:
         original_image = pygame.image.load(f'assets/sprites/{piece_type}.png').convert_alpha()
     except pygame.error:
@@ -67,32 +96,104 @@ select_highlight_img = pygame.transform.scale(select_highlight_img_raw, (SQUARE_
 empty_highlight_img = pygame.transform.scale(empty_highlight_img_raw, (SQUARE_SIZE, SQUARE_SIZE))
 swap_highlight_img = pygame.transform.scale(swap_highlight_img_raw, (SQUARE_SIZE, SQUARE_SIZE))
 
+# Fonts and pre-rendered static UI text
+FONT_SM = pygame.font.Font(None, 24)
+FONT_MD = pygame.font.Font(None, 36)
+
+UI_TEXT = {
+    'rotate': FONT_SM.render("Rotate", True, BLACK),
+    'done':   FONT_SM.render("Done", True, BLACK),
+    'cancel': FONT_SM.render("Cancel", True, BLACK),
+}
+
+# Dynamic UI text cache
+last_score_text = ""
+score_surface = FONT_MD.render("Player 1: 0    Player 2: 0", True, WHITE)
+
+last_turn_text = ""
+turn_surface = FONT_MD.render("Player 1's turn", True, WHITE)
+
+last_rotation_text = ""
+rotation_surface = FONT_MD.render("Rotations left: 2", True, WHITE)
+
 def ease_in_out_cubic(t):
     if t < 0.5:
         return 4 * t * t * t
     else:
         return 1 - pow(-2 * t + 2, 3) / 2
 
-try:
-    shine_gif = Image.open('assets/Gif/Sh.gif')
-except IOError:
-    print("Error loading shine GIF. Please ensure 'assets/Gif/Sh.gif' exists and is a valid GIF.")
-    sys.exit()
+def load_shine_animation(square_size):
+    # Primary: use imageio to read GIF (no PIL). On web imageio is disabled above.
+    if imageio is not None:
+        try:
+            reader = imageio.get_reader('assets/Gif/Sh.gif')
+            meta = {}
+            try:
+                meta = reader.get_meta_data()
+            except Exception:
+                meta = {}
+            frames = []
+            durations = []
+            index = 0
+            for frame in reader:
+                h, w = frame.shape[:2]
+                has_alpha = frame.shape[2] == 4 if len(frame.shape) == 3 else False
+                surf = pygame.image.frombuffer(frame.tobytes(), (w, h), 'RGBA' if has_alpha else 'RGB')
+                surf = surf.convert_alpha() if has_alpha else surf.convert()
+                surf = pygame.transform.scale(surf, (square_size, square_size))
+                frames.append(surf)
+                # per-frame duration, fallback to GIF-level duration or 100ms
+                d = None
+                try:
+                    frame_meta = reader.get_meta_data(index=index)
+                    d = frame_meta.get('duration', None)
+                except Exception:
+                    d = meta.get('duration', None)
+                if not d or d == 0:
+                    d = 0.1  # seconds fallback
+                durations.append(int(d if d > 10 else d * 1000))
+                index += 1
+            reader.close()
+            if frames:
+                return frames, durations
+            else:
+                print("imageio: GIF loaded but contained no frames.")
+        except Exception as e:
+            print(f"imageio failed to load 'assets/Gif/Sh.gif': {e}. Trying frame folder fallback...")
 
-shine_frames = []
-shine_durations = []
-for frame in ImageSequence.Iterator(shine_gif):
-    frame = frame.convert('RGBA')
-    mode = frame.mode
-    size = frame.size
-    data = frame.tobytes()
+    # Fallback: load frames from a directory
+    frames_dir = 'assets/Gif/Sh_frames'
+    if os.path.isdir(frames_dir):
+        files = [f for f in os.listdir(frames_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort()
+        frames = []
+        durations = []
+        for fname in files:
+            path = os.path.join(frames_dir, fname)
+            try:
+                img = pygame.image.load(path).convert_alpha()
+            except Exception:
+                img = pygame.image.load(path).convert()
+            img = pygame.transform.scale(img, (square_size, square_size))
+            frames.append(img)
+            durations.append(100)  # default 100ms
+        # Optional durations.txt (ms per line)
+        dur_path = os.path.join(frames_dir, 'durations.txt')
+        if frames and os.path.exists(dur_path):
+            try:
+                with open(dur_path, 'r') as f:
+                    durs = [int(x.strip()) for x in f if x.strip()]
+                if len(durs) == len(frames):
+                    durations = durs
+            except Exception:
+                pass
+        if frames:
+            return frames, durations
 
-    pygame_image = pygame.image.fromstring(data, size, mode).convert_alpha()
-    pygame_image = pygame.transform.scale(pygame_image, (SQUARE_SIZE, SQUARE_SIZE))
+    print("Shine animation not available (no PIL, imageio failed, and no frame folder). Animation disabled.")
+    return [], []
 
-    shine_frames.append(pygame_image)
-    duration = frame.info.get('duration', 100)  
-    shine_durations.append(duration)
+shine_frames, shine_durations = load_shine_animation(SQUARE_SIZE)
 
 shine_animation = {
     'frames': shine_frames,
@@ -104,6 +205,62 @@ shine_current_frame = 0
 shine_last_update_time = pygame.time.get_ticks()
 shine_animation_playing = False
 
+# Precompute sprite rotations at 15-degree increments
+ROT_ANGLE_STEP = 15
+ROT_ANGLES = [i * ROT_ANGLE_STEP for i in range(360 // ROT_ANGLE_STEP)]
+
+ROTATED_CACHE = {}
+for key, base_img in list(IMAGES.items()):
+    # Note: IMAGES is being updated in-place below, so iterate on a snapshot
+    ROTATED_CACHE[key] = {angle: pygame.transform.rotate(base_img, angle) for angle in ROT_ANGLES}
+# Also include flipped versions that were added to IMAGES earlier
+for key, base_img in IMAGES.items():
+    if key not in ROTATED_CACHE:
+        ROTATED_CACHE[key] = {angle: pygame.transform.rotate(base_img, angle) for angle in ROT_ANGLES}
+
+def draw_highlight(highlight_squares, highlight_type):
+    for x, y in highlight_squares:
+        if highlight_type == 'select':
+            highlight_img = select_highlight_img
+        elif highlight_type == 'empty':
+            highlight_img = empty_highlight_img
+        elif highlight_type == 'swap':
+            highlight_img = swap_highlight_img
+        else:
+            continue
+        screen.blit(highlight_img, (x * SQUARE_SIZE, y * SQUARE_SIZE))
+
+def draw_board():
+    screen.blit(board_image, (0, 0))
+
+def draw_pieces():
+    for piece in pieces:
+        piece.draw()
+
+def draw_buttons():
+    pygame.draw.rect(screen, DARK_YELLOW if rotate_mode else DARK_RED, rotate_button)
+    rotate_rect = UI_TEXT['rotate'].get_rect(center=rotate_button.center)
+    screen.blit(UI_TEXT['rotate'], rotate_rect)
+    if rotate_mode:
+        pygame.draw.rect(screen, DARK_GREEN, done_button)
+        pygame.draw.rect(screen, DARK_RED, cancel_button)
+        done_rect = UI_TEXT['done'].get_rect(center=done_button.center)
+        cancel_rect = UI_TEXT['cancel'].get_rect(center=cancel_button.center)
+        screen.blit(UI_TEXT['done'], done_rect)
+        screen.blit(UI_TEXT['cancel'], cancel_rect)
+
+def get_square_under_mouse(pos):
+    x, y = pos
+    return (x // SQUARE_SIZE, y // SQUARE_SIZE)
+
+def is_valid_position(x, y):
+    return 0 <= x < BOARD_WIDTH and 0 <= y < BOARD_HEIGHT
+
+def swap_pieces_func(piece1, piece2):
+    board[piece1.y][piece1.x], board[piece2.y][piece2.x] = piece2, piece1
+    piece1.x, piece2.x = piece2.x, piece1.x
+    piece1.y, piece2.y = piece2.y, piece1.y
+
 class Piece:
     def __init__(self, x, y, piece_type, player, flipped=False):
         self.x = x
@@ -114,8 +271,9 @@ class Piece:
         self.initial_rotation = 0
         self.target_rotation = 0
         self.rotation = 0
-        self.rotation_speed = 15
+        self.rotation_speed = 15  # degrees per update
         self.is_rotating = False
+        self.relative_dirs_cache = {}  # cache of rotated direction deltas per angle
         self.update_image()
         self.moved_last_turn = False
         self.rotated_this_turn = False
@@ -129,15 +287,13 @@ class Piece:
         self.movement_elapsed_time = 0
 
     def update_image(self):
-        if self.player == 1:
-            key = self.type + ('_flipped' if self.flipped else '')
+        key = self.type + ('_flipped' if self.flipped else '')
+        angle = int(self.rotation) % 360  # rotation is multiples of 15
+        base = ROTATED_CACHE.get(key, None)
+        if base and angle in base:
+            self.image = base[angle]
         else:
-            key = self.type + ('_flipped' if self.flipped else '')
-        base_image = IMAGES.get(key, None)
-        if base_image:
-            self.image = pygame.transform.rotate(base_image, self.rotation)
-        else:
-            print(f"Image key '{key}' not found.")
+            print(f"Rotated image not found for key '{key}' angle {angle}.")
             sys.exit()
 
     def draw(self):
@@ -148,7 +304,7 @@ class Piece:
         self.is_rotating = True
         self.target_rotation = (self.target_rotation - 90) % 360
 
-    def update(self):
+    def update(self, dt):
         if self.is_rotating:
             if self.rotation != self.target_rotation:
                 rotation_diff = (self.target_rotation - self.rotation) % 360
@@ -182,8 +338,7 @@ class Piece:
                     self.movement_total_time = distance / self.move_speed
                     self.movement_elapsed_time = 0
 
-                delta_time = clock.get_time() / 1000
-                self.movement_elapsed_time += delta_time
+                self.movement_elapsed_time += dt
 
                 t = min(self.movement_elapsed_time / self.movement_total_time, 1)
                 eased_t = ease_in_out_cubic(t)
@@ -223,32 +378,36 @@ class Piece:
             right = (-1, 0)
 
         dirs = []
-
-        if self.type.rstrip('e') == 'PR':
+        t = self.type.rstrip('e')
+        if t == 'PR':
             dirs = [left, (right[0], right[1] + down[1])]
-        elif self.type.rstrip('e') == 'PL':
+        elif t == 'PL':
             dirs = [right, (left[0], left[1] + down[1])]
-        elif self.type.rstrip('e') == 'PX':
+        elif t == 'PX':
             dirs = [
                 (right[0] + up[0], right[1] + up[1]),
                 (right[0] + down[0], right[1] + down[1]),
                 (left[0] + up[0], left[1] + up[1]),
                 (left[0] + down[0], left[1] + down[1]),
             ]
-        elif self.type.rstrip('e') == 'DP':
+        elif t == 'DP':
             dirs = [up, (up[0]*2, up[1]*2), left, right]
-        elif self.type.rstrip('e') == 'DT':
+        elif t == 'DT':
             dirs = [up, (up[0]+left[0], up[1]+left[1]), (up[0]+right[0], up[1]+right[1]), down]
-        elif self.type.rstrip('e') == 'DN':
+        elif t == 'DN':
             dirs = [up, down, (left[0]*2, left[1]*2), (right[0]*2, right[1]*2)]
-        elif self.type.rstrip('e') == 'C':
+        elif t == 'C':
             dirs = [up, (down[0]+left[0], down[1]+left[1]), (down[0]+right[0], down[1]+right[1])]
 
         adjusted_dirs = []
-        angle = -self.rotation % 360
-        for dx, dy in dirs:
-            nx, ny = self.rotate_direction(dx, dy, angle)
-            adjusted_dirs.append((nx, ny))
+        angle = (-rotation) % 360
+        if angle not in self.relative_dirs_cache:
+            for dx, dy in dirs:
+                nx, ny = self.rotate_direction(dx, dy, angle)
+                adjusted_dirs.append((nx, ny))
+            self.relative_dirs_cache[angle] = adjusted_dirs
+        else:
+            adjusted_dirs = self.relative_dirs_cache[angle]
 
         available_squares = []
         for dx, dy in adjusted_dirs:
@@ -258,66 +417,23 @@ class Piece:
         return available_squares
 
     def rotate_direction(self, dx, dy, angle):
-        angle_rad = math.radians(angle)
-        cos_theta = round(math.cos(angle_rad))
-        sin_theta = round(math.sin(angle_rad))
-        nx = cos_theta * dx - sin_theta * dy
-        ny = sin_theta * dx + cos_theta * dy
-        return int(nx), int(ny)
-
-def draw_highlight(highlight_squares, highlight_type):
-    """
-    Draw highlight images based on the type.
-
-    :param highlight_squares: Iterable of (x, y) tuples to highlight.
-    :param highlight_type: String indicating the type of highlight ('select', 'empty', 'swap').
-    """
-    for x, y in highlight_squares:
-        if highlight_type == 'select':
-            highlight_img = select_highlight_img
-        elif highlight_type == 'empty':
-            highlight_img = empty_highlight_img
-        elif highlight_type == 'swap':
-            highlight_img = swap_highlight_img
+        a = angle % 360
+        if a == 0:
+            return dx, dy
+        elif a == 90:
+            return -dy, dx
+        elif a == 180:
+            return -dx, -dy
+        elif a == 270:
+            return dy, -dx
         else:
-            continue  
-
-        screen.blit(highlight_img, (x * SQUARE_SIZE, y * SQUARE_SIZE))
-
-def draw_board():
-    screen.blit(board_image, (0, 0))
-
-def draw_pieces():
-    for piece in pieces:
-        piece.draw()
-
-def draw_buttons():
-    pygame.draw.rect(screen, DARK_YELLOW if rotate_mode else DARK_RED, rotate_button)
-    font = pygame.font.Font(None, 24)
-    rotate_text = font.render("Rotate", True, BLACK)
-    rotate_rect = rotate_text.get_rect(center=rotate_button.center)
-    screen.blit(rotate_text, rotate_rect)
-    if rotate_mode:
-        pygame.draw.rect(screen, DARK_GREEN, done_button)
-        pygame.draw.rect(screen, DARK_RED, cancel_button)
-        done_text = font.render("Done", True, BLACK)
-        cancel_text = font.render("Cancel", True, BLACK)
-        done_rect = done_text.get_rect(center=done_button.center)
-        cancel_rect = cancel_text.get_rect(center=cancel_button.center)
-        screen.blit(done_text, done_rect)
-        screen.blit(cancel_text, cancel_rect)
-
-def get_square_under_mouse(pos):
-    x, y = pos
-    return (x // SQUARE_SIZE, y // SQUARE_SIZE)
-
-def is_valid_position(x, y):
-    return 0 <= x < BOARD_WIDTH and 0 <= y < BOARD_HEIGHT
-
-def swap_pieces_func(piece1, piece2):
-    board[piece1.y][piece1.x], board[piece2.y][piece2.x] = piece2, piece1
-    piece1.x, piece2.x = piece2.x, piece1.x
-    piece1.y, piece2.y = piece2.y, piece1.y
+            # Safe fallback (should not be used; rotations are 90° steps for logic)
+            angle_rad = math.radians(a)
+            cos_theta = round(math.cos(angle_rad))
+            sin_theta = round(math.sin(angle_rad))
+            nx = cos_theta * dx - sin_theta * dy
+            ny = sin_theta * dx + cos_theta * dy
+            return int(nx), int(ny)
 
 def get_accessible_highlight_layers(selected_piece):
     layers = []
@@ -335,15 +451,15 @@ def get_accessible_highlight_layers(selected_piece):
         for piece in current_layer_pieces:
 
             if piece == selected_piece:
-            	check = piece.get_available_squares()
-            	available_squares = []
+                check = piece.get_available_squares()
+                available_squares = []
 
-            	for x, y in check:
-            		if is_valid_position(x, y) and board[y][x] != 0:
-            			available_squares.append((x, y))
+                for x, y in check:
+                    if is_valid_position(x, y) and board[y][x] != 0:
+                        available_squares.append((x, y))
 
             else:
-            	available_squares = piece.get_available_squares()
+                available_squares = piece.get_available_squares()
 
             for x, y in available_squares:
                 if not is_valid_position(x, y):
@@ -431,8 +547,6 @@ def end_turn_func():
                 piece.moved_last_turn = False
 
 def find_movement_path(selected_piece, destination):
-    from collections import deque
-
     accessible_pieces = set()
     _, _, visited_pieces = get_all_accessible_squares(selected_piece, selected_piece)
     for x, y in visited_pieces:
@@ -453,7 +567,7 @@ def find_movement_path(selected_piece, destination):
     while queue:
         current_pos, path = queue.popleft()
         if current_pos == (selected_piece.x, selected_piece.y):
-            return path[::-1]  
+            return path[::-1]
 
         if len(path) == 1:
             pieces_to_consider = accessible_pieces_first_step
@@ -469,6 +583,7 @@ def find_movement_path(selected_piece, destination):
 
     return None
 
+# Pieces
 pieces = [
     Piece(0, 7, "DP", player=1), Piece(1, 7, "DT", player=1), Piece(2, 7, "DN", player=1),
     Piece(3, 7, "C", player=1), Piece(4, 7, "DN", player=1), Piece(5, 7, "DT", player=1),
@@ -507,7 +622,7 @@ game_over = False
 accessible_highlight_layers = []
 current_highlight_layer = 0
 last_layer_update_time = 0
-layer_delay = 80  
+layer_delay = 80
 highlighting_in_progress = False
 
 button_width = min(150, (SCREEN_WIDTH - 30) // 2)
@@ -535,6 +650,8 @@ clock = pygame.time.Clock()
 pieces_are_animating = False
 
 while True:
+    dt = clock.tick(60) / 1000.0  # one dt for all updates
+
     if game_over:
         font = pygame.font.Font(None, 72)
         if player_scores[1] >= 6 and player_scores[2] >= 6:
@@ -551,7 +668,7 @@ while True:
             screen.blit(text_surface, text_rect)
             pygame.display.flip()
             pygame.time.wait(3000)
-        break  
+        break
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -559,10 +676,9 @@ while True:
             sys.exit()
         elif not pieces_are_animating:
             if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  
+                if event.button == 1:
                     if rotate_mode:
                         if done_button.collidepoint(event.pos):
-
                             rotation_chances -= 1
                             if selected_piece:
                                 selected_piece.rotated_this_turn = True
@@ -576,7 +692,6 @@ while True:
                             highlighting_in_progress = False
 
                         elif cancel_button.collidepoint(event.pos):
-
                             rotate_mode = False
 
                             if selected_piece:
@@ -594,12 +709,10 @@ while True:
                                 last_layer_update_time = pygame.time.get_ticks()
                                 highlighting_in_progress = True
                         else:
-
                             x, y = get_square_under_mouse(event.pos)
-                            if (x, y) == (selected_piece.x, selected_piece.y) and selected_piece:
+                            if selected_piece and (x, y) == (selected_piece.x, selected_piece.y):
                                 selected_piece.rotate()
                     elif rotate_button.collidepoint(event.pos):
-
                         if rotation_chances > 0:
                             if selected_piece and selected_piece.type.rstrip('e') in ['DP', 'DT', 'DN', 'C'] and selected_piece.player == current_player and not selected_piece.rotated_this_turn:
                                 rotate_mode = True
@@ -618,7 +731,6 @@ while True:
                         else:
                             rotate_mode = False
                     else:
-
                         x, y = get_square_under_mouse(event.pos)
                         if is_valid_position(x, y):
                             clicked_piece = board[y][x]
@@ -644,7 +756,6 @@ while True:
                                     pass
                                 else:
                                     if (x, y) == (selected_piece.x, selected_piece.y):
-
                                         selected_piece = None
                                         highlighted_positions = set()
                                         empty_accessible_squares = set()
@@ -653,15 +764,12 @@ while True:
                                         current_highlight_layer = 0
                                         highlighting_in_progress = False
                                     elif (x, y) in highlighted_positions:
-
                                         path = find_movement_path(selected_piece, (x, y))
                                         if path is None:
-
                                             pass
                                         else:
                                             target_piece = board[y][x]
                                             if target_piece == 0:
-
                                                 selected_piece.movement_path = path
                                                 selected_piece.is_moving = True
                                                 selected_piece.current_segment_index = 0
@@ -671,7 +779,6 @@ while True:
                                                 animating_pieces = [selected_piece]
                                                 pieces_are_animating = True
                                             else:
-
                                                 selected_piece.movement_path = path
                                                 selected_piece.is_moving = True
                                                 selected_piece.current_segment_index = 0
@@ -695,9 +802,8 @@ while True:
                                             highlighting_in_progress = False
                                     else:
                                         pass
-                elif event.button == 3:  
+                elif event.button == 3:
                     if rotate_mode:
-
                         rotate_mode = False
 
                         if selected_piece:
@@ -715,7 +821,6 @@ while True:
                             last_layer_update_time = pygame.time.get_ticks()
                             highlighting_in_progress = True
                     else:
-
                         selected_piece = None
                         highlighted_positions = set()
                         empty_accessible_squares = set()
@@ -725,7 +830,7 @@ while True:
                         highlighting_in_progress = False
 
     for piece in pieces:
-        piece.update()
+        piece.update(dt)
 
     if highlighting_in_progress and current_highlight_layer < len(accessible_highlight_layers):
         current_time = pygame.time.get_ticks()
@@ -743,7 +848,6 @@ while True:
 
     if pieces_are_animating:
         if all(not piece.is_moving for piece in animating_pieces):
-
             pieces_are_animating = False
             animating_pieces = []
 
@@ -775,9 +879,8 @@ while True:
 
     draw_pieces()
 
-    if selected_piece:
+    if selected_piece and shine_animation['frame_count'] > 0:
         if shine_animation_playing:
-
             current_time = pygame.time.get_ticks()
             elapsed_time = current_time - shine_last_update_time
             frame_duration = shine_animation['durations'][shine_current_frame]
@@ -787,7 +890,6 @@ while True:
                 shine_last_update_time = current_time
 
                 if shine_current_frame >= shine_animation['frame_count']:
-
                     shine_animation_playing = False
                     shine_current_frame = 0
 
@@ -796,27 +898,30 @@ while True:
                 shine_rect = shine_frame.get_rect()
                 shine_rect.topleft = (selected_piece.x * SQUARE_SIZE, selected_piece.y * SQUARE_SIZE)
                 screen.blit(shine_frame, shine_rect)
-        else:
-            pass
 
     draw_buttons()
 
-    font = pygame.font.Font(None, 36)
-    score_text = f"Player 1: {player_scores[1]}    Player 2: {player_scores[2]}"
-    score_surface = font.render(score_text, True, WHITE)
+    # Update dynamic UI text only when it changes
+    new_score_text = f"Player 1: {player_scores[1]}    Player 2: {player_scores[2]}"
+    if new_score_text != last_score_text:
+        last_score_text = new_score_text
+        score_surface = FONT_MD.render(new_score_text, True, WHITE)
+
+    new_turn_text = f"Player {current_player}'s turn"
+    if new_turn_text != last_turn_text:
+        last_turn_text = new_turn_text
+        turn_surface = FONT_MD.render(new_turn_text, True, WHITE)
+
+    new_rotation_text = f"Rotations left: {rotation_chances}"
+    if new_rotation_text != last_rotation_text:
+        last_rotation_text = new_rotation_text
+        rotation_surface = FONT_MD.render(new_rotation_text, True, WHITE)
+
     screen.blit(score_surface, (10, SCREEN_HEIGHT - 130))
-
-    turn_text = f"Player {current_player}'s turn"
-    turn_surface = font.render(turn_text, True, WHITE)
     screen.blit(turn_surface, (SCREEN_WIDTH - 200, SCREEN_HEIGHT - 130))
-
-    rotation_text = f"Rotations left: {rotation_chances}"
-    rotation_surface = font.render(rotation_text, True, WHITE)
     screen.blit(rotation_surface, (SCREEN_WIDTH - 200, SCREEN_HEIGHT - 100))
 
     pygame.display.flip()
-
-    clock.tick(60)
 
 pygame.quit()
 sys.exit()
