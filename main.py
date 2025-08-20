@@ -7,14 +7,6 @@ from collections import deque
 # Detect web runtime (pygbag/pygame-web)
 IS_WEB = sys.platform == "emscripten"
 
-# Optional GIF loader (no PIL). Disable on web to avoid heavy deps.
-try:
-    if IS_WEB:
-        raise ImportError("Disable imageio on web (use frames fallback)")
-    import imageio.v2 as imageio
-except Exception:
-    imageio = None
-
 pygame.init()
 
 # Board constants
@@ -122,101 +114,13 @@ def ease_in_out_cubic(t):
     else:
         return 1 - pow(-2 * t + 2, 3) / 2
 
-def load_shine_animation(square_size):
-    # Primary: use imageio to read GIF (no PIL). On web imageio is disabled above.
-    if imageio is not None:
-        try:
-            reader = imageio.get_reader('assets/Gif/Sh.gif')
-            meta = {}
-            try:
-                meta = reader.get_meta_data()
-            except Exception:
-                meta = {}
-            frames = []
-            durations = []
-            index = 0
-            for frame in reader:
-                h, w = frame.shape[:2]
-                has_alpha = frame.shape[2] == 4 if len(frame.shape) == 3 else False
-                surf = pygame.image.frombuffer(frame.tobytes(), (w, h), 'RGBA' if has_alpha else 'RGB')
-                surf = surf.convert_alpha() if has_alpha else surf.convert()
-                surf = pygame.transform.scale(surf, (square_size, square_size))
-                frames.append(surf)
-                # per-frame duration, fallback to GIF-level duration or 100ms
-                d = None
-                try:
-                    frame_meta = reader.get_meta_data(index=index)
-                    d = frame_meta.get('duration', None)
-                except Exception:
-                    d = meta.get('duration', None)
-                if not d or d == 0:
-                    d = 0.1  # seconds fallback
-                durations.append(int(d if d > 10 else d * 1000))
-                index += 1
-            reader.close()
-            if frames:
-                return frames, durations
-            else:
-                print("imageio: GIF loaded but contained no frames.")
-        except Exception as e:
-            print(f"imageio failed to load 'assets/Gif/Sh.gif': {e}. Trying frame folder fallback...")
-
-    # Fallback: load frames from a directory
-    frames_dir = 'assets/Gif/Sh_frames'
-    if os.path.isdir(frames_dir):
-        files = [f for f in os.listdir(frames_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        files.sort()
-        frames = []
-        durations = []
-        for fname in files:
-            path = os.path.join(frames_dir, fname)
-            try:
-                img = pygame.image.load(path).convert_alpha()
-            except Exception:
-                img = pygame.image.load(path).convert()
-            img = pygame.transform.scale(img, (square_size, square_size))
-            frames.append(img)
-            durations.append(100)  # default 100ms
-        # Optional durations.txt (ms per line)
-        dur_path = os.path.join(frames_dir, 'durations.txt')
-        if frames and os.path.exists(dur_path):
-            try:
-                with open(dur_path, 'r') as f:
-                    durs = [int(x.strip()) for x in f if x.strip()]
-                if len(durs) == len(frames):
-                    durations = durs
-            except Exception:
-                pass
-        if frames:
-            return frames, durations
-
-    print("Shine animation not available (no PIL, imageio failed, and no frame folder). Animation disabled.")
-    return [], []
-
-shine_frames, shine_durations = load_shine_animation(SQUARE_SIZE)
-
-shine_animation = {
-    'frames': shine_frames,
-    'durations': shine_durations,
-    'frame_count': len(shine_frames),
-}
-
-shine_current_frame = 0
-shine_last_update_time = pygame.time.get_ticks()
-shine_animation_playing = False
-
 # Precompute sprite rotations at 15-degree increments
 ROT_ANGLE_STEP = 15
 ROT_ANGLES = [i * ROT_ANGLE_STEP for i in range(360 // ROT_ANGLE_STEP)]
 
 ROTATED_CACHE = {}
-for key, base_img in list(IMAGES.items()):
-    # Note: IMAGES is being updated in-place below, so iterate on a snapshot
-    ROTATED_CACHE[key] = {angle: pygame.transform.rotate(base_img, angle) for angle in ROT_ANGLES}
-# Also include flipped versions that were added to IMAGES earlier
 for key, base_img in IMAGES.items():
-    if key not in ROTATED_CACHE:
-        ROTATED_CACHE[key] = {angle: pygame.transform.rotate(base_img, angle) for angle in ROT_ANGLES}
+    ROTATED_CACHE[key] = {angle: pygame.transform.rotate(base_img, angle) for angle in ROT_ANGLES}
 
 def draw_highlight(highlight_squares, highlight_type):
     for x, y in highlight_squares:
@@ -657,7 +561,7 @@ while True:
         if player_scores[1] >= 6 and player_scores[2] >= 6:
             text = "Draw!"
         elif player_scores[1] >= 6:
-            text = "Player 1 Wins!"
+                text = "Player 1 Wins!"
         elif player_scores[2] >= 6:
             text = "Player 2 Wins!"
         else:
@@ -737,10 +641,6 @@ while True:
                             if selected_piece is None:
                                 if clicked_piece != 0 and clicked_piece.can_be_selected(current_player):
                                     selected_piece = clicked_piece
-
-                                    shine_current_frame = 0
-                                    shine_last_update_time = pygame.time.get_ticks()
-                                    shine_animation_playing = True
 
                                     accessible_highlight_layers = get_accessible_highlight_layers(selected_piece)
                                     highlighted_positions = set()
@@ -878,26 +778,6 @@ while True:
         draw_highlight([(selected_piece.x, selected_piece.y)], 'select')
 
     draw_pieces()
-
-    if selected_piece and shine_animation['frame_count'] > 0:
-        if shine_animation_playing:
-            current_time = pygame.time.get_ticks()
-            elapsed_time = current_time - shine_last_update_time
-            frame_duration = shine_animation['durations'][shine_current_frame]
-
-            if elapsed_time >= frame_duration:
-                shine_current_frame += 1
-                shine_last_update_time = current_time
-
-                if shine_current_frame >= shine_animation['frame_count']:
-                    shine_animation_playing = False
-                    shine_current_frame = 0
-
-            if shine_animation_playing:
-                shine_frame = shine_animation['frames'][shine_current_frame]
-                shine_rect = shine_frame.get_rect()
-                shine_rect.topleft = (selected_piece.x * SQUARE_SIZE, selected_piece.y * SQUARE_SIZE)
-                screen.blit(shine_frame, shine_rect)
 
     draw_buttons()
 
